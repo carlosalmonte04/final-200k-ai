@@ -14,3 +14,7 @@
 - Event calendars (holidays, special events that affect traffic)
 - Economic indicators (unemployment rates, if available by borough)
 - Infrastructure data (speed limits, presence of bike lanes)
+
+### Data source:
+
+https://catalog.data.gov/dataset/motor-vehicle-collisions-crashes
