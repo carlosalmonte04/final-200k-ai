@@ -23,5 +23,5 @@ Through advanced data analysis and machine learning techniques, I seek to uncove
 ```shell
    curl -X POST http://localhost:8080/predict \
      -H "Content-Type: application/json" \
-     -d '{"hour": 20, "day_of_week": 0, "month": 6}'
+     -d '{"hour": 20, "day_of_week": 0, "month": 6, "year": 2026}'
 ```
