@@ -1,11 +1,11 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
-import seaborn as sns
+import joblib
 from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
@@ -255,15 +255,67 @@ print(f"Test set: {X_test.shape[0]} samples")
 
 # Train models
 print("\n" + "="*50)
-print("Training Random Forest Regressor...")
+print("Hyperparameter Tuning for Random Forest...")
+print("="*50)
+
+# For large datasets, use a sample for faster hyperparameter tuning
+# This speeds up the process while still finding good parameters
+SAMPLE_SIZE_FOR_TUNING = 50000  # Use 50k samples for tuning
+if len(X_train) > SAMPLE_SIZE_FOR_TUNING:
+    print(f"Using {SAMPLE_SIZE_FOR_TUNING:,} samples for hyperparameter tuning (out of {len(X_train):,} total)")
+    rng = np.random.default_rng(42)  # For reproducibility
+    tuning_indices = rng.choice(len(X_train), SAMPLE_SIZE_FOR_TUNING, replace=False)
+    X_train_tuning = X_train.iloc[tuning_indices]
+    y_train_tuning = y_train.iloc[tuning_indices]
+else:
+    X_train_tuning = X_train
+    y_train_tuning = y_train
+
+# Define parameter grid for hyperparameter tuning
+param_distributions = {
+    'n_estimators': [50, 100, 200, 300],
+    'max_depth': [8, 10, 12, 15, None],
+    'min_samples_split': [10, 20, 30, 50],
+    'min_samples_leaf': [5, 10, 15, 20],
+    'max_features': ['sqrt', 'log2', 0.5, 0.7]
+}
+
+# Create base model
+rf_base = RandomForestRegressor(random_state=42, n_jobs=-1)
+
+# Perform randomized search with cross-validation
+# Using fewer iterations (n_iter=20) to balance time vs. thoroughness
+# Using 3-fold CV to speed up the process
+print("Performing randomized search with 3-fold cross-validation...")
+print("This may take a few minutes...")
+
+rf_search = RandomizedSearchCV(
+    estimator=rf_base,
+    param_distributions=param_distributions,
+    n_iter=30,  # Number of parameter settings sampled
+    cv=3,  # 3-fold cross-validation
+    scoring='neg_mean_squared_error',  # We want to minimize MSE
+    n_jobs=-1,
+    random_state=42,
+    verbose=1
+)
+
+rf_search.fit(X_train_tuning, y_train_tuning)
+
+# Get best parameters
+best_params = rf_search.best_params_
+print(f"\nBest hyperparameters found:")
+for param, value in best_params.items():
+    print(f"  {param}: {value}")
+print(f"Best CV score (negative MSE): {rf_search.best_score_:.4f}")
+
+# Train final model with best parameters
+print("\n" + "="*50)
+print("Training Random Forest with Best Hyperparameters...")
 print("="*50)
 
 rf_model = RandomForestRegressor(
-    n_estimators=100,
-    max_depth=10,  # Reduced from 15 to prevent overfitting
-    min_samples_split=20,  # Increased from 5 to require more samples for splits
-    min_samples_leaf=10,  # Added: minimum samples required in leaf nodes
-    max_features='sqrt',  # Added: use sqrt of features per tree (regularization)
+    **best_params,
     random_state=42,
     n_jobs=-1
 )
@@ -289,10 +341,93 @@ print(f"Test MAE: {rf_test_mae:.4f}")
 print(f"Train R²: {rf_train_r2:.4f}")
 print(f"Test R²: {rf_test_r2:.4f}")
 print("\n" + "="*50)
-print("Training Linear Regression...")
+print("Hyperparameter Tuning for Linear Regression...")
 print("="*50)
 
-lr_model = LinearRegression()
+# Define parameter grid for regularized linear models
+# We'll test Ridge, Lasso, and ElasticNet with different alpha values
+lr_param_distributions = {
+    'alpha': [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0],
+    'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]  # Only used for ElasticNet
+}
+
+# Test different linear models
+print("Testing Ridge, Lasso, and ElasticNet regression...")
+
+# Ridge Regression
+ridge_base = Ridge(random_state=42, max_iter=1000)
+ridge_search = RandomizedSearchCV(
+    estimator=ridge_base,
+    param_distributions={'alpha': lr_param_distributions['alpha']},
+    n_iter=10,
+    cv=3,
+    scoring='neg_mean_squared_error',
+    n_jobs=-1,
+    random_state=42,
+    verbose=0
+)
+ridge_search.fit(X_train_tuning, y_train_tuning)
+best_ridge_params = ridge_search.best_params_
+best_ridge_score = ridge_search.best_score_
+
+# Lasso Regression
+lasso_base = Lasso(random_state=42, max_iter=1000)
+lasso_search = RandomizedSearchCV(
+    estimator=lasso_base,
+    param_distributions={'alpha': lr_param_distributions['alpha']},
+    n_iter=10,
+    cv=3,
+    scoring='neg_mean_squared_error',
+    n_jobs=-1,
+    random_state=42,
+    verbose=0
+)
+lasso_search.fit(X_train_tuning, y_train_tuning)
+best_lasso_params = lasso_search.best_params_
+best_lasso_score = lasso_search.best_score_
+
+# ElasticNet Regression
+elasticnet_base = ElasticNet(random_state=42, max_iter=1000)
+elasticnet_search = RandomizedSearchCV(
+    estimator=elasticnet_base,
+    param_distributions=lr_param_distributions,
+    n_iter=20,
+    cv=3,
+    scoring='neg_mean_squared_error',
+    n_jobs=-1,
+    random_state=42,
+    verbose=0
+)
+elasticnet_search.fit(X_train_tuning, y_train_tuning)
+best_elasticnet_params = elasticnet_search.best_params_
+best_elasticnet_score = elasticnet_search.best_score_
+
+# Compare all models and select the best one
+models_comparison = {
+    'Ridge': (best_ridge_score, best_ridge_params),
+    'Lasso': (best_lasso_score, best_lasso_params),
+    'ElasticNet': (best_elasticnet_score, best_elasticnet_params)
+}
+
+best_lr_model_name = max(models_comparison, key=lambda x: models_comparison[x][0])
+best_lr_score, best_lr_params = models_comparison[best_lr_model_name]
+
+print(f"\nBest Linear Regression model: {best_lr_model_name}")
+print(f"Best parameters: {best_lr_params}")
+print(f"Best CV score (negative MSE): {best_lr_score:.4f}")
+
+# Train final linear regression model with best parameters
+print("\n" + "="*50)
+print(f"Training {best_lr_model_name} with Best Hyperparameters...")
+print("="*50)
+
+if best_lr_model_name == 'Ridge':
+    lr_model = Ridge(**best_lr_params, random_state=42, max_iter=1000)
+elif best_lr_model_name == 'Lasso':
+    lr_model = Lasso(**best_lr_params, random_state=42, max_iter=1000)
+else:  # ElasticNet
+    lr_model = ElasticNet(**best_lr_params, random_state=42, max_iter=1000)
+
 lr_model.fit(X_train, y_train)
 
 y_train_pred_lr = lr_model.predict(X_train)
@@ -361,6 +496,19 @@ axes[1, 1].set_title('Average Injuries by Hour of Day')
 axes[1, 1].grid(True, alpha=0.3)
 axes[1, 1].set_xticks(range(0, 24, 2))
 
+# 5. R² Score comparison between models
+axes[2, 0].bar(['Random Forest', 'Linear Regression'], [rf_test_r2, lr_test_r2])
+axes[2, 0].set_ylabel('R² Score')
+axes[2, 0].set_title('R² Score Comparison (Test Set)')
+axes[2, 0].grid(True, alpha=0.3)
+axes[2, 0].axhline(y=0, color='r', linestyle='--', alpha=0.5)
+
+# 6. MAE comparison between models
+axes[2, 1].bar(['Random Forest', 'Linear Regression'], [rf_test_mae, lr_test_mae])
+axes[2, 1].set_ylabel('MAE (Mean Absolute Error)')
+axes[2, 1].set_title('MAE Comparison (Test Set)')
+axes[2, 1].grid(True, alpha=0.3)
+
 plt.tight_layout()
 plt.savefig('model_results.png', dpi=150, bbox_inches='tight')
 print("Visualizations saved to 'model_results.png'")
@@ -382,6 +530,51 @@ print(f"- Vehicle features (vehicle types, number of vehicles)")
 print(f"- Contributing factors")
 print(f"- Aggregate statistics (average injuries by location/time)")
 
+# Save the trained models
+print("\n" + "="*50)
+print("Saving trained models...")
+print("="*50)
+
+# Create timestamp for versioning (optional)
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# Save Random Forest model
+rf_model_filename = f'rf_model_{timestamp}.pkl'
+joblib.dump(rf_model, rf_model_filename)
+print(f"Random Forest model saved to '{rf_model_filename}'")
+
+# Also save without timestamp for easy loading
+joblib.dump(rf_model, 'rf_model.pkl')
+print("Random Forest model also saved to 'rf_model.pkl' (latest version)")
+
+# Save Linear Regression model
+lr_model_filename = f'lr_model_{timestamp}.pkl'
+joblib.dump(lr_model, lr_model_filename)
+print(f"Linear Regression model saved to '{lr_model_filename}'")
+
+# Also save without timestamp for easy loading
+joblib.dump(lr_model, 'lr_model.pkl')
+print("Linear Regression model also saved to 'lr_model.pkl' (latest version)")
+
+# Save feature columns (critical for making predictions later)
+joblib.dump(feature_columns, 'feature_columns.pkl')
+print("Feature columns saved to 'feature_columns.pkl'")
+
+# Save model metadata
+model_metadata = {
+    'rf_test_r2': rf_test_r2,
+    'rf_test_mae': rf_test_mae,
+    'rf_test_mse': rf_test_mse,
+    'lr_test_r2': lr_test_r2,
+    'lr_test_mae': lr_test_mae,
+    'lr_test_mse': lr_test_mse,
+    'num_features': len(feature_columns),
+    'timestamp': timestamp
+}
+joblib.dump(model_metadata, 'model_metadata.pkl')
+print("Model metadata saved to 'model_metadata.pkl'")
+print("\nAll models saved successfully!")
+
 # Make predictions on sample data
 # Create a single-row DataFrame with all required features
 sample_data = {}
@@ -396,9 +589,9 @@ sample_data['WEEK_OF_YEAR'] = [32]
 sample_data['IS_WEEKEND'] = [0]
 sample_data['IS_RUSH_HOUR'] = [1]
 sample_data['IS_NIGHT'] = [0]
-sample_data['IS_MORNING'] = [0]
+sample_data['IS_MORNING'] = [1]
 sample_data['IS_AFTERNOON'] = [0]
-sample_data['IS_EVENING'] = [1]
+sample_data['IS_EVENING'] = [0]
 sample_data['SEASON'] = [2]
 
 # Cyclical features
